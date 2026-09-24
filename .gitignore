@@ -8,3 +8,12 @@ typechain
 
 #Secret key
 .secret.ts
+
+.env
+typechain-types/
+dist/
+coverage/
+coverage.json
+
+lib/
+out/

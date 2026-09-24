@@ -1,21 +1,24 @@
 import { ethers } from 'hardhat';
-import { FlashBot } from '../typechain/FlashBot';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
 
 async function main(token: string) {
-  const [signer] = await ethers.getSigners();
-  const flashBot: FlashBot = (await ethers.getContractAt(
-    'FlashBot',
-    'CONTRACT_ADDR', // your contract address
-    signer
-  )) as FlashBot;
+  if (!token || !ethers.isAddress(token)) {
+    throw new Error(`Usage: hardhat run scripts/add-basetoken.ts  (pass a token address)\nGot: ${token}`);
+  }
+  const address = process.env.FLASHBOT_ADDRESS;
+  if (!address) throw new Error('Set FLASHBOT_ADDRESS in .env');
 
-  await flashBot.addBaseToken(token);
+  const [signer] = await ethers.getSigners();
+  const flashBot = await ethers.getContractAt('FlashBot', address, signer);
+
+  const tx = await flashBot.addBaseToken(token);
+  await tx.wait(1);
   console.log(`Base token added: ${token}`);
 }
 
-const args = process.argv.slice(2);
-
-main(args[0])
+main(process.argv.slice(2)[0])
   .then(() => process.exit(0))
   .catch((err) => {
     console.error(err);

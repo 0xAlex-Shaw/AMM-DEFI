@@ -1,5 +1,5 @@
-//SPDX-License-Identifier: Unlicense
-pragma solidity ^0.7.0;
+// SPDX-License-Identifier: WTFPL
+pragma solidity ^0.8.28;
 
 interface IUniswapV2Pair {
     function factory() external view returns (address);

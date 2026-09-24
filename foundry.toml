@@ -1,0 +1,22 @@
+# Foundry runs the contract tests: no node_modules required, and fuzzing the AMM maths is exactly
+# what it is good at. Hardhat is retained for deployment and for the TypeScript bot, which needs
+# Node regardless. `forge install` the two dependencies below, or run `make setup`.
+[profile.default]
+src = "contracts"
+test = "test/foundry"
+libs = ["lib"]
+solc_version = "0.8.28"
+# Paris, not Cancun: the bot targets chains that are not all on Cancun. See FlashBot.sol.
+evm_version = "paris"
+optimizer = true
+optimizer_runs = 800
+remappings = [
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+
+[profile.default.fuzz]
+runs = 1024
+
+[profile.deep.fuzz]
+runs = 20000

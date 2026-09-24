@@ -1,18 +1,19 @@
-import { ethers, run } from 'hardhat';
-import { FlashBot } from '../typechain/FlashBot';
+import { ethers } from 'hardhat';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
 
 async function main() {
-  await run('compile');
-  const flashBot: FlashBot = (await ethers.getContractAt(
-    'FlashBot',
-    'CONTRACT ADDRESS' // contract address
-  )) as FlashBot;
+  const address = process.env.FLASHBOT_ADDRESS;
+  if (!address) throw new Error('Set FLASHBOT_ADDRESS in .env');
 
-  const owner = await flashBot.owner();
-  console.log(`Owner: ${owner}`);
+  const flashBot = await ethers.getContractAt('FlashBot', address);
 
-  const tokens = await flashBot.getBaseTokens();
-  console.log('Base tokens: ', tokens);
+  console.log(`Address:      ${address}`);
+  console.log(`Owner:        ${await flashBot.owner()}`);
+  console.log(`WETH:         ${await flashBot.WETH()}`);
+  console.log(`Default fee:  ${await flashBot.defaultFeeNumerator()} / 1000`);
+  console.log('Base tokens: ', await flashBot.getBaseTokens());
 }
 
 main()

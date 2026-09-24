@@ -1,43 +1,33 @@
-import { task, HardhatUserConfig } from 'hardhat/config';
-import '@typechain/hardhat';
-import '@nomiclabs/hardhat-waffle';
+import '@nomicfoundation/hardhat-toolbox';
+import * as dotenv from 'dotenv';
+import type { HardhatUserConfig } from 'hardhat/config';
 
-import deployer from './.secret';
+dotenv.config();
 
-// const BSC_RPC = 'https://bsc-dataseed.binance.org/';
-const BSC_RPC = 'https://bsc-dataseed1.defibit.io/';
-const BSC_Tetsnet_RPC = 'https://data-seed-prebsc-1-s1.binance.org:8545/';
+// Forking is opt-in: without an archive endpoint the fork tests are skipped rather than failing,
+// so `npm test` works on a clean clone with no configuration at all.
+const forkUrl = process.env.BSC_ARCHIVE_RPC_URL ?? '';
 
 const config: HardhatUserConfig = {
-  solidity: { version: '0.7.6' },
+  solidity: {
+    version: '0.8.28',
+    settings: {
+      optimizer: { enabled: true, runs: 800 },
+      // The bot targets a long tail of EVM chains, several of which are not on Cancun.
+      // Paris keeps the bytecode deployable everywhere; see the note in FlashBot.sol.
+      evmVersion: 'paris',
+    },
+  },
   networks: {
     hardhat: {
-      // loggingEnabled: true,
-      forking: {
-        url: BSC_RPC,
-        enabled: true,
-      },
-      accounts: {
-        accountsBalance: '1000000000000000000000000', // 1 mil ether
-      },
-    },
-    bscTestnet: {
-      url: BSC_Tetsnet_RPC,
-      chainId: 0x61,
-      accounts: [deployer.private],
+      forking: forkUrl ? { url: forkUrl } : undefined,
     },
     bsc: {
-      url: BSC_RPC,
-      chainId: 0x38,
-      accounts: [deployer.private],
+      url: process.env.BSC_RPC_URL ?? 'https://bsc-dataseed1.binance.org',
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
   },
-  mocha: {
-    timeout: 40000,
-  },
+  mocha: { timeout: 120_000 },
 };
 
-/**
- * @type import('hardhat/config').HardhatUserConfig
- */
-module.exports = config;
+export default config;

@@ -1,9 +1,8 @@
 import { ethers } from 'hardhat';
-import { BigNumber } from 'ethers';
+import { formatEther } from 'ethers';
 import pool from '@ricokahler/pool';
 import AsyncLock from 'async-lock';
 
-import { FlashBot } from '../typechain/FlashBot';
 import { Network, tryLoadPairs, getTokens } from './tokens';
 import { getBnbPrice } from './basetoken-price';
 import log from './log';
@@ -13,81 +12,97 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function calcNetProfit(profitWei: BigNumber, address: string, baseTokens: Tokens): Promise<number> {
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/// Net profit in USD, after the gas the arbitrage transaction will cost.
+async function calcNetProfit(profitWei: bigint, address: string, baseTokens: Tokens): Promise<number> {
   let price = 1;
-  if (baseTokens.wbnb.address == address) {
+  if (baseTokens.wbnb.address === address) {
     price = await getBnbPrice();
   }
-  let profit = parseFloat(ethers.utils.formatEther(profitWei));
-  profit = profit * price;
-
-  const gasCost = price * parseFloat(ethers.utils.formatEther(config.gasPrice)) * (config.gasLimit as number);
+  // ethers v6 returns bigint, not BigNumber.
+  const profit = parseFloat(formatEther(profitWei)) * price;
+  const gasCost = price * parseFloat(formatEther(config.gasPrice)) * config.gasLimit;
   return profit - gasCost;
 }
 
-function arbitrageFunc(flashBot: FlashBot, baseTokens: Tokens) {
+function arbitrageFunc(flashBot: any, baseTokens: Tokens) {
   const lock = new AsyncLock({ timeout: 2000, maxPending: 20 });
+
   return async function arbitrage(pair: ArbitragePair) {
     const [pair0, pair1] = pair.pairs;
 
-    let res: [BigNumber, string] & {
-      profit: BigNumber;
-      baseToken: string;
-    };
+    let profit: bigint;
+    let baseToken: string;
     try {
-      res = await flashBot.getProfit(pair0, pair1);
-      log.debug(`Profit on ${pair.symbols}: ${ethers.utils.formatEther(res.profit)}`);
+      const res = await flashBot.getProfit(pair0, pair1);
+      profit = res[0] as bigint;
+      baseToken = res[1] as string;
+      log.debug(`Profit on ${pair.symbols}: ${formatEther(profit)}`);
     } catch (err) {
-      log.debug(err);
+      log.debug(`getProfit failed on ${pair.symbols}: ${errorMessage(err)}`);
       return;
     }
 
-    if (res.profit.gt(BigNumber.from('0'))) {
-      const netProfit = await calcNetProfit(res.profit, res.baseToken, baseTokens);
-      if (netProfit < config.minimumProfit) {
-        return;
-      }
+    if (profit <= 0n) return;
 
-      log.info(`Calling flash arbitrage, net profit: ${netProfit}`);
-      try {
-        // lock to prevent tx nonce overlap
-        await lock.acquire('flash-bot', async () => {
-          const response = await flashBot.flashArbitrage(pair0, pair1, {
-            gasPrice: config.gasPrice,
-            gasLimit: config.gasLimit,
-          });
-          const receipt = await response.wait(1);
-          log.info(`Tx: ${receipt.transactionHash}`);
+    const netProfit = await calcNetProfit(profit, baseToken, baseTokens);
+    if (netProfit < config.minimumProfit) return;
+
+    log.info(`Calling flash arbitrage on ${pair.symbols}, net profit: $${netProfit.toFixed(2)}`);
+    try {
+      // Serialise sends so two transactions cannot claim the same nonce.
+      await lock.acquire('flash-bot', async () => {
+        const response = await flashBot.flashArbitrage(pair0, pair1, {
+          gasPrice: config.gasPrice,
+          gasLimit: config.gasLimit,
         });
-      } catch (err) {
-        if (err.message === 'Too much pending tasks' || err.message === 'async-lock timed out') {
-          return;
-        }
-        log.error(err);
-      }
+        const receipt = await response.wait(1);
+        // ethers v6 renamed `transactionHash` to `hash`.
+        log.info(`Tx: ${receipt?.hash}`);
+      });
+    } catch (err) {
+      const msg = errorMessage(err);
+      if (msg === 'Too much pending tasks' || msg === 'async-lock timed out') return;
+      log.error(msg);
     }
   };
 }
 
 async function main() {
   const pairs = await tryLoadPairs(Network.BSC);
-  const flashBot = (await ethers.getContractAt('FlashBot', config.contractAddr)) as FlashBot;
+  const flashBot = await ethers.getContractAt('FlashBot', config.contractAddr);
   const [baseTokens] = getTokens(Network.BSC);
 
-  log.info('Start arbitraging');
-  while (true) {
-    await pool({
-      collection: pairs,
-      task: arbitrageFunc(flashBot, baseTokens),
-      // maxConcurrency: config.concurrency,
-    });
-    await sleep(1000);
+  log.info(`Start arbitraging ${pairs.length} pairs at concurrency ${config.concurrency}`);
+
+  // Consecutive failures back off, so a flaky RPC endpoint does not turn into a hot loop hammering
+  // it. The original was a bare `while (true)` with a fixed 1s sleep and no error handling at all.
+  let consecutiveFailures = 0;
+
+  for (;;) {
+    try {
+      await pool({
+        collection: pairs,
+        task: arbitrageFunc(flashBot, baseTokens),
+        // The original passed no concurrency limit -- the `maxConcurrency` line was commented out --
+        // so `config.concurrency` was dead config and every pair was queried at once.
+        maxConcurrency: config.concurrency,
+      });
+      consecutiveFailures = 0;
+      await sleep(1000);
+    } catch (err) {
+      consecutiveFailures += 1;
+      const backoff = Math.min(1000 * 2 ** consecutiveFailures, 60_000);
+      log.error(`Sweep failed (${consecutiveFailures}): ${errorMessage(err)}. Retrying in ${backoff}ms`);
+      await sleep(backoff);
+    }
   }
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    log.error(err);
-    process.exit(1);
-  });
+main().catch((err) => {
+  log.error(err);
+  process.exit(1);
+});
